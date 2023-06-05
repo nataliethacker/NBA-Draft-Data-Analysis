@@ -1,0 +1,598 @@
+---
+title: "Atlanta Hawks Assessment"
+author: "Natalie Thacker"
+date: "2023-05-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(stringr)
+library(forcats)
+```
+
+```{r}
+nba_draft <- read_csv(file = 'nbaplayersdraft.csv')
+```
+
+# Data Comprehension
+
+```{r}
+duke_players <- nba_draft %>%
+  filter(college == "Duke", year <= 2000)%>%
+  group_by(team)%>%
+  summarise(players_drafted=n())%>%
+  arrange(desc(players_drafted))
+duke_players
+```
+
+As displayed in the table above, Dallas, Minnesota, and Phoenix have the drafted the most players who went to Duke in or before the 2000 draft as they each have two, while several teams have drafted one.
+
+```{r}
+name_begins_d <- nba_draft %>%
+  filter(startsWith(nba_draft$player, "D")==TRUE, year%%2==0) %>%
+  group_by(team) %>%
+  summarise(players_drafted = n())%>%
+  arrange(desc(players_drafted))
+name_begins_d
+```
+
+As displayed in the table above, Boston, Milwaukee, and Seattle have drafted the most players with a first name starting with D in even years, as they have each drafted seven such players.
+
+
+In order to analyze the relationship between a team's first round pick slot in one year with their first round pick slot in the subsequent years, I first wanted to focus on one team and examine their draft slot year by year. In the chart below, I plotted the Atlanta Hawks' first round draft slot for the 2004 through 2021 drafts, as the NBA expanded to 30 teams in 2004.
+
+```{r}
+hawks_draft_picks <- nba_draft %>%
+  select(year, team, overall_pick)%>%
+  filter(team == "ATL", overall_pick <= 30, year >= 2004)%>%
+  ggplot(aes(x=year,y=overall_pick))+
+  geom_line()+
+  scale_x_continuous(breaks = 2004:2021)+
+  ylab("First Round Pick Slot")+
+  xlab("Year")+
+  labs(title = "Atlanta Hawks First Round Draft Slots 2004-2021")
+hawks_draft_picks
+```
+
+As shown in this chart, in general, a higher slot in one year is usually followed by a lower slot the next year. The reverse of this also applies, as lower draft slots are often followed by higher slots in the next draft. This fluctuation is likely caused by poorly performing teams receiving low draft slots then drafting players who increase their team production, thus giving the team a better record and lowering their chances at getting another low slot.
+
+Additionally, to examine this relationship, I want to look at the draft slots for every NBA team in one year followed by the next. As shown below, I plotted the first round draft slot for each NBA team in 2017 (represented by black dots) as well as their first round draft slots in 2018 (represented by red dots).
+
+```{r}
+draft_slots_2017 <- nba_draft %>%
+  select(team, year, overall_pick)%>%
+  filter(overall_pick <= 30, year==2017)
+
+draft_slots_2018 <- nba_draft %>%
+  select(team, year, overall_pick) %>%
+  filter(overall_pick <= 30, year==2018)
+```
+
+```{r}
+ggplot(data=draft_slots_2017, aes(x=team, y=overall_pick))+
+  geom_point()+
+  geom_point(data=draft_slots_2018, aes(x=team,y=overall_pick), color="red")+
+  xlab("Team")+
+  ylab("First Round Draft Slot")+
+  labs(title="First Round Draft Slots in 2017 vs 2018 by Team")+
+  guides(x=guide_axis(angle = 90))
+```
+
+<!-- https://stackoverflow.com/questions/54712989/overlaying-plots-from-different-dataframes-in-ggplot-without-messing-with-legend -->
+
+As was the pattern with the Atlanta Hawks from 2004-2021, most NBA teams with high draft slots in 2017 received lower draft slots in 2018 and vice versa. There are exceptions however, as some teams such as the Los Angeles Clippers, and Miami Heat did not have first round picks in both years due to trading them away.
+
+
+# Analytical Acumen 
+To value each draft slot in the NBA draft (1-60), I assumed varying levels of production depending on how high or low a player was drafted. To do this, I found the minimum, first quartile, median, third quartile, and maximum of the stats that I felt best represented player productivity (points, rebounds, and assists). For simplification, I assumed that draft slots 40-60 should perform within the minimum and first quartile for each metric. For slots 20-40, I assumed that they should produce close to the median, or within the first quartile and third quartile. Lastly, I assumed that slots 1-20 should produce at a level between the third quartile and the maximum. 
+
+```{r}
+five_num_sum <- tibble(points=fivenum(nba_draft$points,na.rm = TRUE),
+points_per_game=fivenum(nba_draft$points_per_game, na.rm=TRUE),
+rebounds=fivenum(nba_draft$total_rebounds, na.rm=TRUE),
+average_total_rebounds=fivenum(nba_draft$average_total_rebounds, na.rm=TRUE),
+assists=fivenum(nba_draft$assists, na.rm=TRUE),
+average_assists=fivenum(nba_draft$average_assists, na.rm=TRUE))
+five_num_sum
+```
+
+To analyze under/overperformance, I used the average on each of the stats because I felt it was the only fair way to assess players who have had long careers in this dataset as well as the recent draft picks. To determine if draft picks were underperforming or underperforming, I separated them by picks 1-20, 20-40, and 40-60. For picks 40-60, I classified overperforming as exceeding the first quartile in any of the three stats. As for underperformance, I found that there were players in the dataset who had an "NA" for all of points, rebounds, and assists-- meaning they likely never appeared in an NBA game for the team that drafted them. For picks 20-40, I classified overperformance as producing above the median, and underperformance as producing below the median. Lastly, for picks 1-20 I classified underformance as producing below the third quartile and overperformance as being an outlier in any of the stats.
+
+```{r}
+high_outlier_points <- 10+(10-3.4)*1.5
+high_outlier_points
+high_outlier_rebounds <- 4.2 + 1.5*(4.2-1.7)
+high_outlier_rebounds
+high_outlier_assists <- 2.1 + 1.5*(2.1-1.1)
+high_outlier_assists
+```
+
+As shown above, I used the first and third quartile for each stat to determine what the high outliers would be.
+
+```{r}
+never_appeared <- nba_draft %>%
+  group_by(team)%>%
+  filter(overall_pick >= 40)%>%
+  filter(is.na(points_per_game) & is.na(average_total_rebounds) & is.na(average_assists))%>%
+  summarise(never_appeared = n())%>%
+  arrange(desc(never_appeared))
+never_appeared
+```
+
+The table above gives the number of draft picks for each team that did not appear in a game for them. In other words, the late picks that I classified as underperforming.
+
+```{r}
+late_picks <- nba_draft %>%
+  select(year, team, player, overall_pick, points_per_game, average_total_rebounds, average_assists)%>%
+  filter(overall_pick >= 40)
+
+late_picks["points_per_game"][is.na(late_picks["points_per_game"])] <- 0
+late_picks["average_total_rebounds"][is.na(late_picks["average_total_rebounds"])]<-0
+late_picks["average_assists"][is.na(late_picks["average_assists"])] <- 0
+```
+
+<!-- https://sparkbyexamples.com/r-programming/replace-na-values-with-zero-in-r-dataframe/#:~:text=How%20do%20I%20replace%20NA,tidyr%3A%3Areplace_na()%20functions. -->
+
+The chart below shows the points per game for every 40-60 draft slot for each NBA team. The red line represents the first quartile of all points per game in the dataset, the blue line represents the median, and the green line represents the third quartile. For clarification, since these points represent the later draft picks, any player above the red line would be overperforming by my assumptions.
+
+```{r}
+late_picks%>%
+  group_by(year, team)%>%
+  ggplot(aes(x=team, y=points_per_game))+
+  geom_point()+
+  geom_hline(yintercept = 3.4, color="red")+
+  geom_hline(yintercept= 6.2, color="blue")+
+  geom_hline(yintercept= 10, color="green")+
+  guides(x=guide_axis(angle=90))+
+  xlab("Team")+
+  ylab("Points per Game")+
+  labs(title="Points per Game for Every 40-60 Slot Pick by Team")
+```
+
+<!-- http://www.sthda.com/english/wiki/abline-r-function-an-easy-way-to-add-straight-lines-to-a-plot-using-r-software#:~:text=The%20R%20function%20abline(),%3DNULL%2C%20...) -->
+```{r}
+mid_picks <- nba_draft%>%
+  select(year,team,player,overall_pick,points_per_game,average_total_rebounds,average_assists)%>%
+  filter(overall_pick > 20 & overall_pick <40)
+mid_picks["points_per_game"][is.na(mid_picks["points_per_game"])] <- 0
+mid_picks["average_total_rebounds"][is.na(mid_picks["average_total_rebounds"])] <- 0
+mid_picks["average_assists"][is.na(mid_picks["average_assists"])] <- 0
+```
+
+```{r}
+mid_picks%>%
+  ggplot(aes(x=team, y=points_per_game))+
+  geom_point()+
+  geom_hline(yintercept= 3.4 , color="red")+
+  geom_hline(yintercept= 6.2, color="blue")+
+  geom_hline(yintercept= 10, color="green")+
+  guides(x=guide_axis(angle=90))+
+  xlab("Team")+
+  ylab("Points per Game")+
+  labs(title = "Points per Game for Every 20-40 Draft Slot by Team")
+```
+
+Since the chart above represents the middle draft picks, I considered players above the blue line as overperforming, and players below this line as underperforming.
+
+```{r}
+early_picks <- nba_draft%>%
+  select(year,player, team, overall_pick, points_per_game, average_total_rebounds,average_assists)%>%
+  filter(overall_pick <= 20)
+
+early_picks["points_per_game"][is.na(early_picks["points_per_game"])] <- 0
+early_picks["average_total_rebounds"][is.na(early_picks["average_total_rebounds"])] <- 0
+early_picks["average_assists"][is.na(early_picks["average_assists"])] <- 0
+```
+
+```{r}
+early_picks%>%
+  ggplot(aes(x=team, y=points_per_game))+
+  geom_point()+
+  geom_hline(yintercept= 3.4 , color="red")+
+  geom_hline(yintercept= 6.2, color="blue")+
+  geom_hline(yintercept= 10, color="green")+
+  geom_hline(yintercept=19.9, color = "purple")+
+  guides(x=guide_axis(angle=90))+
+  xlab("Team")+
+  ylab("Points per Game")+
+  labs(title = "Points per Game for Every 1-20 Draft Slot by Team")
+```
+
+The chart above represents the points per game by first 20 picks in the draft. I added the purple line to represent where the high outliers would be. In order to be considered an overperforming 1-20 draft slot, a player would be above this line by my assumption. Finally, players below the first quartile (green line) would be underperforming. I followed this same process for rebounds and assists to determine which players were under/overperforming based on their draft slot.
+
+```{r}
+over_late_points <- late_picks%>%
+  group_by(team,player)%>%
+  filter(points_per_game > 3.4) %>%
+  summarise(above_first_quartile_points = n())%>%
+  arrange(desc(above_first_quartile_points))
+over_late_points
+```
+
+The table above displays the players for each team that were drafted between 40 and 60 that performed above the first quartile for points per game.
+
+```{r}
+over_middle_points <- mid_picks%>%
+  group_by(team,player)%>%
+  filter(points_per_game > 6.2)%>%
+  summarise(above_median_points = n())%>%
+  arrange(desc(above_median_points))
+```
+
+The table above displays the players for each team that were drafted between 20 and 40 that performed above the median for points per game. 
+
+```{r}
+over_early_points <- early_picks %>%
+  group_by(team,player)%>%
+  filter(points_per_game > 19.9)%>%
+  summarise(high_outlier_points = n())%>%
+  arrange(desc(high_outlier_points))
+over_early_points
+```
+
+The table above displays the players for each team that were drafted between 1 and 20 that were high outliers in points per game.
+
+Using the same process, I created tables to display the players for each team that overperformed based on their draft slot for rebounds and assists. 
+
+```{r}
+over_later_rebounds <- late_picks%>%
+  group_by(team,player)%>%
+  filter(average_total_rebounds > 1.7)%>%
+  summarise(above_first_quartile_rebounds=n())%>%
+  arrange(desc(above_first_quartile_rebounds))
+over_later_rebounds
+```
+
+```{r}
+over_middle_rebounds <- mid_picks %>%
+  group_by(team,player)%>%
+  filter(average_total_rebounds > 2.8)%>%
+  summarise(above_median_rebounds=n())%>%
+  arrange(desc(above_median_rebounds))
+over_middle_rebounds
+```
+
+```{r}
+over_early_rebounds <- early_picks %>%
+  group_by(team,player)%>%
+  select(team, player, average_total_rebounds)%>%
+  filter(average_total_rebounds > 7.95)%>%
+  summarise(high_outlier_rebounds = n())%>%
+  arrange(desc(high_outlier_rebounds))
+over_early_rebounds
+```
+
+```{r}
+over_late_assists <- late_picks%>%
+  group_by(team,player) %>%
+  filter(average_assists > 0.5)%>%
+  summarise(above_first_quartile_assists = n())
+over_late_assists
+```
+
+```{r}
+over_middle_assists <- mid_picks %>%
+  group_by(team,player) %>%
+  filter(average_assists > 1.1) %>%
+  summarise(above_median_assists= n())
+over_middle_assists
+```
+
+```{r}
+over_early_assists <- early_picks %>%
+  group_by(team,player)%>%
+  filter(average_assists > 3.6)%>%
+  summarise(high_outlier_assists = n())
+over_early_assists
+```
+
+Next, I joined the datasets for overperforming players by draft slot. I made sure to join them by player so that if a player overperformed in multiple metrics they were not double counted. In other words, I added the overperformers in points, rebounds, and assists together for every team for the late, middle, and early draft slots.
+
+```{r}
+high_outliers <- over_early_points%>%
+  right_join(over_early_rebounds, by = "player")%>%
+  right_join(over_early_assists, by = "player")%>%
+  select(team, player, high_outlier_points, high_outlier_rebounds, high_outlier_assists)
+
+high_outliers["high_outlier_points"][is.na(high_outliers["high_outlier_points"])] <- 0
+high_outliers["high_outlier_rebounds"][is.na(high_outliers["high_outlier_rebounds"])]<-0
+high_outliers["high_outlier_assists"][is.na(high_outliers["high_outlier_assists"])] <- 0
+
+over_prod_early <- high_outliers%>%
+  group_by(team)%>%
+  summarise(total_high_outliers = n())%>%
+  arrange(desc(total_high_outliers))
+over_prod_early
+```
+
+The table above displays the number of players for each team that overperformed in points, rebounds, or assists that were selected between 1 and 20. 
+
+```{r}
+over_production_middle <- over_middle_points %>%
+  right_join(over_middle_rebounds, by = "player")%>%
+  right_join(over_middle_assists, by = "player")%>%
+  select(team, player, above_median_points, above_median_rebounds, above_median_assists)
+
+over_production_middle["above_median_points"][is.na(over_production_middle["above_median_points"])] <- 0
+over_production_middle["above_median_rebounds"][is.na(over_production_middle["above_median_rebounds"])]<-0
+over_production_middle["above_median_assists"][is.na(over_production_middle["above_median_assists"])] <- 0
+
+over_prod_middle <- over_production_middle%>%
+  group_by(team)%>%
+  summarise(total_above_median = n())%>%
+  arrange(desc(total_above_median))
+over_prod_middle
+```
+
+The table above displays the number of players for each team that overperformed in points, rebounds, or assists that were selected between 20 and 40. 
+
+```{r}
+over_production_late <- over_late_points %>%
+  right_join(over_later_rebounds, by = "player")%>%
+  right_join(over_late_assists, by = "player")%>%
+  select(team,player,above_first_quartile_points, above_first_quartile_rebounds,above_first_quartile_assists)
+
+over_production_late["above_first_quartile_points"][is.na(over_production_late["above_first_quartile_points"])] <- 0
+over_production_late["above_first_quartile_rebounds"][is.na(over_production_late["above_first_quartile_rebounds"])]<-0
+over_production_late["above_first_quartile_assists"][is.na(over_production_late["above_first_quartile_assists"])] <- 0
+
+over_prod_late <- over_production_late %>%
+  group_by(team)%>%
+  summarise(total_above_first_quartile = n())%>%
+  arrange(desc(total_above_first_quartile))
+over_prod_late
+```
+
+The table above displays the number of players for each team that overperformed in points, rebounds, or assists that were selected between 40 and 60.
+
+```{r}
+total_over_prod <- over_prod_early%>%
+  inner_join(over_prod_middle, by = "team")%>%
+  inner_join(over_prod_late, by = "team")%>%
+  mutate(total_over_expected = rowSums(across(c("total_high_outliers", "total_above_median", "total_above_first_quartile"))))%>%
+  arrange(desc(total_over_expected))
+total_over_prod
+```
+
+In order to determine the total overproduction for each NBA team, I added together the number of the overperforming players in the late, middle, and early slots. As represented in the table above and chart below, the Milwaukee Bucks, Utah Jazz, Sacremento Kings, Philadelphia 76ers, Minnesota Timberwolves, Boston Celtics, Chicago Bulls, Los Angeles Lakers, Phoenix Suns, and Detroit Pistons were the top 10 teams in terms of draft picks exceeding expectations based on their draft slots. 
+
+```{r}
+total_over_prod%>%
+  mutate(team=fct_reorder(team,desc(total_over_expected)))%>%
+  ggplot(aes(x=team, y=total_over_expected))+
+  geom_bar(stat="identity")+
+  coord_flip()+
+  ylab("Number of Draft Picks Exceeding Expectations")+
+  xlab("Team")+
+  labs(title = "Number of Overperforming Draft Picks by Team")
+```
+
+<!-- https://ggplot2.tidyverse.org/articles/faq-reordering.html -->
+
+In order to analyze underproduction, I found the number of draft picks for each team-- in the late slots-- that had missing values for points, rebounds, and assists-- In other words, draft picks that did not appear in a game for the team that drafted them.
+
+```{r}
+never_appeared <- nba_draft %>%
+  group_by(team)%>%
+  filter(overall_pick >= 40)%>%
+  filter(is.na(points_per_game) & is.na(average_total_rebounds) & is.na(average_assists))%>%
+  summarise(never_appeared = n())%>%
+  arrange(desc(never_appeared))
+never_appeared
+```
+
+```{r}
+never_appeared%>%
+  mutate(team=fct_reorder(team, desc(never_appeared)))%>%
+  ggplot(aes(x=team, y=never_appeared))+
+  geom_bar(stat="identity")+
+  coord_flip()+
+  ylab("Number of Draft Picks that Did Not Appear in a Game")+
+  xlab("Team")+
+  labs(title = "Draft Picks Per Team that Did Not Appear in a Game")
+```
+
+
+In order to determine which college teams have had the most players overperform expectations after entering the NBA, I used the same method as I did with analyzing under/overperformance of NBA teams, as I still separated the draft slots into 1-20, 20-40, and 40-60 and used the third quartile, median, and high outliers to determine if players overperformed based on their draft slots. 
+
+```{r}
+late_picks_college <- nba_draft%>%
+  filter(!is.na(college))%>%
+  select(year,college,player,overall_pick,points_per_game,average_total_rebounds,average_assists)%>%
+  filter(overall_pick >= 40)
+
+late_picks_college["points_per_game"][is.na(late_picks_college["points_per_game"])] <- 0
+late_picks_college["average_total_rebounds"][is.na(late_picks_college["average_total_rebounds"])]<-0
+late_picks_college["average_assists"][is.na(late_picks_college["average_assists"])] <- 0
+```
+
+```{r}
+over_late_points_college <- late_picks_college%>%
+  group_by(college,player)%>%
+  select(college,player,points_per_game)%>%
+  filter(points_per_game > 3.4)%>%
+  summarise(over_first_quartile_points = n())%>%
+  arrange(desc(over_first_quartile_points))
+over_late_points_college
+```
+
+The table above displays the college players who were drafted 40-60 and produced higher than the first quartile in points, meaning they overperformed based on their draft slot.
+
+I used the same method to determine overperformance for slots 40-60 for rebounds and assists, as displayed below.
+
+```{r}
+over_late_rebounds_college <- late_picks_college%>%
+  group_by(college,player)%>%
+  select(college,player,average_total_rebounds)%>%
+  filter(average_total_rebounds > 1.7)%>%
+  summarise(over_first_quartile_rebounds = n())%>%
+  arrange(desc(over_first_quartile_rebounds))
+over_late_rebounds_college
+```
+
+```{r}
+over_late_assists_college <- late_picks_college %>%
+  group_by(college,player)%>%
+  select(college,player,average_assists)%>%
+  filter(average_assists > 0.5)%>%
+  summarise(over_first_quartile_assists=n())%>%
+  arrange(desc(over_first_quartile_assists))
+over_late_assists_college
+```
+
+```{r}
+late_over_prod_college <- over_late_points_college%>%
+  right_join(over_late_rebounds_college, by="player")%>%
+  right_join(over_late_assists_college, by="player")%>%
+  select(college,player,over_first_quartile_points,over_first_quartile_rebounds,over_first_quartile_assists)%>%
+  group_by(college)%>%
+  summarise(total_above_first_quartile = n())%>%
+  arrange(desc(total_above_first_quartile))
+late_over_prod_college
+```
+
+I found overall overproduction in picks 40-60 by adding together the number of overperformers for points, rebounds, and assists for each college. Like I did previously, I joined the datasetd by player to avoid double counting players that overperformed in multiple categories. 
+
+Using the same process as shown above, I found the overall overproduction in picks 20-40 and 1-20, as displayed below.
+
+```{r}
+middle_picks_college <- nba_draft%>%
+  filter(!is.na(college))%>%
+  select(year,college,player,overall_pick,points_per_game,average_total_rebounds,average_assists)%>%
+  filter(overall_pick < 40 & overall_pick >20)
+
+middle_picks_college["points_per_game"][is.na(middle_picks_college["points_per_game"])] <- 0
+middle_picks_college["average_total_rebounds"][is.na(middle_picks_college["average_total_rebounds"])]<-0
+middle_picks_college["average_assists"][is.na(middle_picks_college["average_assists"])] <- 0
+```
+
+```{r}
+over_mid_points_college <- middle_picks_college%>%
+  group_by(college,player)%>%
+  select(college,player,points_per_game)%>%
+  filter(points_per_game > 6.2) %>%
+  summarise(above_median_points = n())%>%
+  arrange(desc(above_median_points))
+over_mid_points_college
+```
+
+```{r}
+over_mid_rebounds_college <- middle_picks_college%>%
+  group_by(college,player)%>%
+  select(college,player,average_total_rebounds)%>%
+  filter(average_total_rebounds > 2.8)%>%
+  summarise(above_median_rebounds = n())%>%
+  arrange(desc(above_median_rebounds))
+over_mid_rebounds_college
+```
+
+```{r}
+over_mid_assists_college <- middle_picks_college%>%
+  group_by(college,player)%>%
+  select(college,player,average_assists)%>%
+  filter(average_assists > 1.1)%>%
+  summarise(above_median_assists = n())
+over_mid_assists_college
+```
+
+```{r}
+middle_over_prod_college <- over_mid_points_college%>%
+  right_join(over_mid_rebounds_college, by = "player")%>%
+  right_join(over_mid_assists_college, by = "player") %>%
+  select(college,player,above_median_points,above_median_rebounds,above_median_assists)%>%
+  group_by(college)%>%
+  summarise(total_above_median = n())%>%
+  arrange(desc(total_above_median))
+middle_over_prod_college
+```
+
+```{r}
+early_picks_college <- nba_draft %>%
+  select(year,college,player,overall_pick,points_per_game,average_total_rebounds,average_assists)%>%
+  filter(overall_pick <= 20 )
+
+early_picks_college["points_per_game"][is.na(early_picks_college["points_per_game"])] <- 0
+early_picks_college["average_total_rebounds"][is.na(early_picks_college["average_total_rebounds"])]<-0
+early_picks_college["average_assists"][is.na(early_picks_college["average_assists"])] <- 0
+```
+
+```{r}
+above_early_points_college <- early_picks_college%>%
+  filter(!is.na(college))%>%
+  group_by(college,player)%>%
+  select(college,player,points_per_game)%>%
+  filter(points_per_game > 19.9)%>%
+  summarise(high_outliers_points = n())%>%
+  arrange(desc(high_outliers_points))
+above_early_points_college
+```
+
+```{r}
+above_early_rebounds_college <- early_picks_college %>%
+  filter(!is.na(college))%>%
+  group_by(college,player)%>%
+  select(college,player,average_total_rebounds)%>%
+  filter(average_total_rebounds > 7.95)%>%
+  summarise(high_outliers_rebounds = n())%>%
+  arrange(desc(high_outliers_rebounds))
+above_early_rebounds_college
+```
+
+```{r}
+above_early_assists_college <- early_picks_college %>%
+  filter(!is.na(college))%>%
+  group_by(college,player)%>%
+  select(college,player,average_assists)%>%
+  filter(average_assists > 3.6)%>%
+  summarise(high_outliers_assists=n())%>%
+  arrange(desc(high_outliers_assists))
+above_early_assists_college
+```
+
+```{r}
+high_outliers_college <- above_early_points_college %>%
+  right_join(above_early_rebounds_college, by = "player")%>%
+  right_join(above_early_assists_college, by = "player")%>%
+  select(college,player,high_outliers_points, high_outliers_rebounds, high_outliers_assists)
+
+high_outliers_college["high_outliers_points"][is.na(high_outliers_college["high_outliers_points"])] <- 0
+high_outliers_college["high_outliers_rebounds"][is.na(high_outliers_college["high_outliers_rebounds"])] <- 0
+high_outliers_college["high_outliers_assists"][is.na(high_outliers_college["high_outliers_assists"])] <- 0
+
+over_prod_early_college <- high_outliers_college %>%
+  group_by(college)%>%
+  summarise(total_high_outliers = n())%>%
+  arrange(desc(total_high_outliers))
+over_prod_early_college
+```
+
+```{r}
+total_over_prod_college <- over_prod_early_college%>%
+  inner_join(middle_over_prod_college, by = "college")%>%
+  inner_join(late_over_prod_college, by = "college")%>%
+  mutate(total_over_expected = rowSums(across(c("total_high_outliers", "total_above_median", "total_above_first_quartile"))))%>%
+  arrange(desc(total_over_expected))%>%
+  head(11)
+total_over_prod_college
+```
+
+In order to determine total overproduction by college players entering the NBA, I added together the number of overperforming players in the late, middle, and early draft slots. By my methods and assumptions, Kentucky, UCLA, Duke, Arizona, Michigan, North Carolina, Kansas, Texas, Oregon, Louisville, and UConn were the top 10 (including a tie) colleges with the most drafted players that went onto exceed expectations based on their draft slots.
+
+```{r}
+total_over_prod_college%>%
+  mutate(college=fct_reorder(college,desc(total_over_expected)))%>%
+  ggplot(aes(x=college, y=total_over_expected))+
+  geom_bar(stat="identity")+
+  coord_flip()+
+  ylab("Number of Draft Picks Exceeding Expectations")+
+  xlab("College")+
+  labs(title = "Top 10 Colleges for Overperforming Drafted Players")
+```
+
+If I were given the opportunity to expand this study, I would want to analyze the current roster of each NBA team at the time of the draft to determine if their draft pick actually met a need. For example, if a team lacks offensive production, I would like to see if they draft a player that goes onto exceed expectations in metrics such as points and assists. I would also look into injury history to try to assess if a player would be a risky draft pick. For example, for those who attended college, I would want to see the number of minutes they played in their college career. If that number was low, that would raise concerns for drafting that player.
